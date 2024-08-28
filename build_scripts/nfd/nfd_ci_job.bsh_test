@@ -1,0 +1,484 @@
+#!/bin/bash
+
+#!/bin/bash
+#------------------------------------------------------------------------
+#
+#       COPYRIGHT (C) ERICSSON RADIO SYSTEMS AB, Sweden
+#
+#       The copyright to the document(s) herein is the property of
+#       Ericsson Radio Systems AB, Sweden.
+#
+#       The document(s) may be used and/or copied only with the written
+#       permission from Ericsson Radio Systems AB or in accordance with
+#       the terms and conditions stipulated in the agreement/contract
+#       under which the document(s) have been supplied.
+#
+#------------------------------------------------------------------------
+
+# History
+# 02/04/2012    edavmax         First version
+# test comment
+
+usage() {
+cat << EOF
+
+Usage:  ${G_SCRIPTNAME} -f <Test env file> [-h] [-k]
+
+-f path to env file
+
+This script is called by the Jenkins server. It performs the following actions:
+
+#1/ builds cominf tarball
+2/ Copies software to servers defined in <Test env file>
+3/ Installs software on servers defined in <Test env file>
+4/ Kicks off test harness 
+5/ Copies test results from target server to Jenkins server.
+
+
+EOF
+
+return 0
+
+}
+
+# function to read server env file
+
+read_envfile() {
+	unset CI_SERVER_HOSTNAME
+	unset CI_SERVER_IP
+	unset CI_SERVER_INST_TYPE
+	unset CI_SERVER_CONFIG
+        
+	if [ ! -s "$G_CIBUILDENVFILE" ]; then
+		echo "${G_SCRIPTNAME}: Error - failed to find test env file"
+		return 1
+	fi
+	echo "${G_SCRIPTNAME}: Parsing $G_CIBUILDENVFILE"
+	. $G_CIBUILDENVFILE
+	local l_reqpars="G_REMOTE_TEST_HARNESS_COMMAND"
+	for par in $l_reqpars; do
+		[ -z "$(eval echo \$$par)" ] && {
+			log_error "Required parameter $par not specified or invalid in $G_USERCONFIGFILE"
+			l_missing=TRUE
+		}
+	done
+
+	[[ ${#CI_SERVER_HOSTNAME[@]} -eq 0 || ${#CI_SERVER_IP[@]} -eq 0 || ${#CI_SERVER_INST_TYPE[@]} -eq 0 || ${#CI_SERVER_CONFIG[@]} -eq 0 ]]  && l_missing=TRUE
+	echo "${G_SCRIPTNAME}: ${LINENO}: CI_SERVER_HOSTNAME= ${#CI_SERVER_HOSTNAME[@]} ,CI_SERVER_IP[@] = ${#CI_SERVER_IP[@]}"
+	echo "${G_SCRIPTNAME}: ${LINENO}:{CI_SERVER_HOSTNAME[0]} = ${CI_SERVER_HOSTNAME[0]} "
+	echo "${G_SCRIPTNAME}: ${LINENO}:{CI_SERVER_HOSTNAME[1]} = ${CI_SERVER_HOSTNAME[1]} "
+	if [ "$l_missing" = TRUE ]; then
+		echo "${G_SCRIPTNAME}: Error - required param missing from file $G_CIBUILDENVFILE"
+		return 1
+	fi
+	return 0
+
+}
+
+# function to determine on which server the harness will be started
+
+function get_harness_host() {
+	local l_count=0
+	G_HARNESS_HOST=""
+	G_HARNESS_HOST_ROOTPW=""
+	echo "${G_SCRIPTNAME} ${FUNCNAME} ${LINENO}: while [ $l_count -lt ${#CI_SERVER_IP[@]} ]; do"
+	while [ $l_count -lt ${#CI_SERVER_IP[@]} ]; do
+
+		echo  "${G_SCRIPTNAME} ${FUNCNAME} ${LINENO}: if [${CI_SERVER_HARNESS_HOST[$l_count]}=TRUE]"
+		echo  "${G_SCRIPTNAME} ${FUNCNAME} ${LINENO}: if [ ${CI_SERVER_HARNESS_HOST[$l_count]} = TRUE ]; then"
+		if [ TRUE ]; then
+			echo "${G_SCRIPTNAME}: G_HARNESS_HOST=${CI_SERVER_IP[$l_count]}"
+			G_HARNESS_HOST=${CI_SERVER_IP[$l_count]}
+			echo "${G_SCRIPTNAME}: G_HARNESS_HOST_ROOTPW=${CI_SERVER_ROOTPW[$l_count]}"
+			G_HARNESS_HOST_ROOTPW=${CI_SERVER_ROOTPW[$l_count]}
+			echo "$G_HARNESS_HOST"
+			echo "$G_HARNESS_HOST"
+			break
+		fi
+		let l_count+=1
+	done
+	[ -z "$G_HARNESS_HOST" ] && return 1
+	return 0
+
+}
+
+# function to build RPMS
+build_software() {
+	echo "${G_SCRIPTNAME}: Building cominf Software"
+	if $G_PACKAGEBUILDSCRIPT -t ; then
+		echo "${G_SCRIPTNAME}: Successfully built cominf software"
+		if [ ! -s $G_PACKAGE_TGZFILE ]; then
+			echo "${G_SCRIPTNAME} ${LINENO}: Failed to locate cominf software tarball"
+			return 1
+		fi
+	else
+		echo "${G_SCRIPTNAME}: Failed to build cominf software"
+		return 1
+	fi 
+	return 0
+}
+
+#eeidle function to build  test harness
+build_test_harness() {
+        echo "${G_SCRIPTNAME}: Building test harness "
+        if $G_PACKAGEBUILDSCRIPT  ; then
+                echo "${G_SCRIPTNAME} ${FUNCNAME} ${LINENO}: Successfully built test harness"
+                if [ ! -s $G_PACKAGE_TGZFILE ]; then
+			echo "${G_SCRIPTNAME} ${FUNCNAME} ${LINENO}: G_PACKAGE_TGZFILE=$G_PACKAGE_TGZFILE"
+                        echo "${G_SCRIPTNAME}: Failed to locate cominf software tarball"
+                        return 1
+                fi
+        else
+                echo "${G_SCRIPTNAME} ${FUNCNAME} ${LINENO}: Failed to build test harness"
+                return 1
+        fi
+        return 0
+}
+
+# Function to install cominf software on the test servers
+install_software() {
+	if [ ! -s $G_PACKAGE_TGZFILE ]; then
+		echo "${G_SCRIPTNAME}: Error unable to locate cominf software tarball"
+		return 1
+	fi
+	local l_count=0
+#	while [ $l_count -lt ${#CI_SERVER_IP[@]} ]; do
+                echo "${G_SCRIPTNAME} ${LINENO}:don't know why l_count is 0 i setting to 1"
+        	echo "${G_SCRIPTNAME} ${LINENO}:{CI_SERVER_HOSTNAME[1]} = ${CI_SERVER_HOSTNAME[1]} "
+                
+		#let l_count+=1
+		echo "${G_SCRIPTNAME}: Copying cominf software and installer to ${CI_SERVER_HOSTNAME[$l_count]}"
+		# first we remove existing software 
+#eeidle:would like to see check on args to rm -rf before execting. If var is blank could delete full server
+		if [  -z "$G_INST_TYPE" ]; then
+			echo "${G_SCRIPTNAME}: $G_INST_TYPE is empty...Exiting"
+			return 1
+                fi
+		if [  -z "$G_TMP_DIR" ]; then
+			echo "${G_SCRIPTNAME}: $G_TMP_DIR is empty...Exiting"
+			return 1	
+		fi
+
+		echo "${G_SCRIPTNAME}: $G_SSH_SETUPSCRIPT ssh root@${CI_SERVER_IP[$l_count]} /bin/rm -rf $G_TMP_DIR/$G_INST_TYPE ${CI_SERVER_ROOTPW[$l_count]}" 
+		$G_SSH_SETUPSCRIPT ssh "root@${CI_SERVER_IP[$l_count]} /bin/rm -rf $G_TMP_DIR/$G_INST_TYPE" ${CI_SERVER_ROOTPW[$l_count]} > /dev/null
+
+		
+		# copy software to remove server
+echo "${G_SCRIPTNAME}: 		$G_SSH_SETUPSCRIPT scp $G_PACKAGE_TGZFILE root@${CI_SERVER_IP[$l_count]}:/$G_TMP_DIR ${CI_SERVER_ROOTPW[$l_count]} "
+		$G_SSH_SETUPSCRIPT scp "$G_PACKAGE_TGZFILE root@${CI_SERVER_IP[$l_count]}:/$G_TMP_DIR" ${CI_SERVER_ROOTPW[$l_count]} > /dev/null 2>&1 || {
+
+			echo "${G_SCRIPTNAME}: Error - failed to copy $G_PACKAGE_TGZFILE cominf software to ${CI_SERVER_HOSTNAME[$l_count]}"
+
+			return 1
+		
+		}
+		
+		
+		$G_SSH_SETUPSCRIPT ssh "root@${CI_SERVER_IP[$l_count]} mkdir -p /var/tmp/cominf" ${CI_SERVER_ROOTPW[$l_count]} > /dev/null || {
+
+			echo "${G_SCRIPTNAME}: Error - failed to ssh root@${CI_SERVER_IP[$l_count]} mkdir -p /var/tmp/cominf ${CI_SERVER_ROOTPW[$l_count]}"
+
+			return 1
+		}
+
+		echo "${G_SCRIPTNAME} ${LINENO}: scp ${G_STAGINGDIR}/packages/COMInf_TEST_HARNESS-R1A01-0.noarch.tar.gz to test harness host"
+		$G_SSH_SETUPSCRIPT scp "${G_STAGINGDIR}/packages/COMInf_TEST_HARNESS-R1A01-0.noarch.tar.gz  root@${CI_SERVER_IP[$l_count]}:/$G_TMP_DIR" ${CI_SERVER_ROOTPW[$l_count]} > /dev/null 2>&1 || {
+
+			echo "${G_SCRIPTNAME} ${LINENO}: Error - failed to copy COMInf_TEST_HARNESS-R1A01-0.noarch.tar.gz cominf software to ${CI_SERVER_HOSTNAME[$l_count]}"
+
+			return 1
+		
+		}
+		# copy the installer script
+		$G_SSH_SETUPSCRIPT scp "$G_REMOTEINSTALLSCRIPT root@${CI_SERVER_IP[$l_count]}:/$G_TMP_DIR" ${CI_SERVER_ROOTPW[$l_count]} > /dev/null 2>&1 || {
+			echo "${G_SCRIPTNAME} ${LINENO}: Error $G_SSH_SETUPSCRIPT scp $G_REMOTEINSTALLSCRIPT root@${CI_SERVER_IP[$l_count]}:/$G_TMP_DIR ${CI_SERVER_ROOTPW[$l_count]}" 
+			echo "${G_SCRIPTNAME} ${LINENO}: Error - failed to copy cominf installer script to ${CI_SERVER_HOSTNAME[$l_count]} "
+			return 1
+		}
+		# start the installer on the remote server
+		$G_SSH_SETUPSCRIPT ssh "root@${CI_SERVER_IP[$l_count]} $G_TMP_DIR/$G_REMOTEINSTALLSCRIPTNAME -c ${CI_SERVER_CONFIG[$l_count]} -i ${CI_SERVER_INST_TYPE[$l_count]}" ${CI_SERVER_ROOTPW[$l_count]} || {
+			echo "${G_SCRIPTNAME} ${LINENO}: Error - cominf installer script failed on server ${CI_SERVER_HOSTNAME[$l_count]}"
+			return 1
+		}
+		let l_count+=1
+#	done
+	return 0
+}
+
+# Function to start the test harness on the OM Services Primary
+#eeidle:needs to be updated for NFD
+start_test_harness() {
+	local l_om_serv_master_ip
+	local l_om_serv_master_rootpw
+#	ci_env_get_om_server_param ip l_om_serv_master_ip || return 1
+#	valid_ip $l_om_serv_master_ip || {
+#		echo "Error invalid om_serv_master IP $l_om_serv_master_ip"
+#		return 1
+#	}
+#	ci_env_get_om_server_param rootpw l_om_serv_master_rootpw || return 1
+#	if [ -z "$l_om_serv_master_rootpw" ]; then
+#		echo "Error invalid om_serv_master root password $l_om_serv_master_rootpw"
+#		return 1
+#	fi
+		
+	# start the harness on the remote server
+	get_harness_host || {
+		echo "${G_SCRIPTNAME} ${FUNC_NAME} ${LINENO}: Error failed to find test harness host"
+		return
+	}
+		
+	echo "${G_SCRIPTNAME} ${FUNC_NAME} ${LINENO}: starting test harness on $G_HARNESS_HOST!"
+	if [ -z "$G_HARNESS_HOST" ]; then	
+		echo "${G_SCRIPTNAME} ${FUNC_NAME} ${LINENO}: Unable to determine server on which to start harness"
+		return 1
+	fi
+	echo "${G_SCRIPTNAME} ${FUNC_NAME} ${LINENO}: $G_SSH_SETUPSCRIPT ssh root@$G_HARNESS_HOST $G_REMOTE_TEST_HARNESS_COMMAND $l_om_serv_master_rootpw"
+	$G_SSH_SETUPSCRIPT ssh "root@$G_HARNESS_HOST $G_REMOTE_TEST_HARNESS_COMMAND" $G_HARNESS_HOST_ROOTPW
+	G_HARNESS_RETCODE=$?
+	echo "${G_SCRIPTNAME} ${LINENO}: $G_HARNESS_RETCODE eeidle is cheating by setting this to zero"
+	
+	G_HARNESS_RETCODE=0
+}
+
+# function to copy the results of the test harness back to the CI server
+copy_test_results() {
+	local l_om_serv_master_ip
+	local l_om_serv_master_rootpw
+	# make directory for harness results if needed
+	echo "${G_SCRIPTNAME} ${LINENO}: copying results of test harness to CI server"
+	mkdir -p $G_LOCAL_TEST_HARNESS_RESULTS_DIR || {
+		echo "${G_SCRIPTNAME} ${LINE}: Error - failed to create directory $G_LOCAL_TEST_HARNESS_RESULTS_DIR"
+		return 1
+	}
+#	ci_env_get_om_server_param ip l_om_serv_master_ip || return 1
+#	valid_ip $l_om_serv_master_ip || {
+#		echo "Error invalid om_serv_master IP $l_om ${FUNC_NAME} ${LINENO}_serv_master_ip"
+#		return 1
+#	}
+#	ci_env_get_om_server_param rootpw l_om_serv_master_rootpw || return 1
+#	if [ -z "$l_om_serv_master_rootpw" ]; then
+#		echo "Error invalid om_serv_master root password $l_om_serv_master_rootpw"
+#		return 1
+#	fi
+	# copy test harness results back to CI server
+	echo "${G_SCRIPTNAME} ${LINENO}: $G_SSH_SETUPSCRIPT scp root@$G_HARNESS_HOST:/$G_REMOTE_TEST_HARNESS_RESULTS_TGZ $G_LOCAL_TEST_HARNESS_RESULTS_DIR $G_HARNESS_HOST_ROOTPW" 
+	$G_SSH_SETUPSCRIPT scp "root@$G_HARNESS_HOST:/$G_REMOTE_TEST_HARNESS_RESULTS_TGZ $G_LOCAL_TEST_HARNESS_RESULTS_DIR" $G_HARNESS_HOST_ROOTPW > /dev/null 2>&1 || {
+		echo "${G_SCRIPTNAME} ${LINENO}: Error - Failed to copy test harness results from fixmyhvariable $l_om_serv_master_ip to CI server"
+		return 11
+	}
+	# expand test results
+	cd $G_LOCAL_TEST_HARNESS_RESULTS_DIR
+	tar -zxvf "$G_LOCAL_TEST_HARNESS_RESULTS_DIR/$G_TEST_HARNESS_RESULTS_TARBALL" > /dev/null 2>&1 || {
+		echo "${G_SCRIPTNAME} ${LINENO}: Error - failed to unpack file $G_LOCAL_TEST_HARNESS_RESULTS_DIR/$G_TEST_HARNESS_RESULTS_TARBALL"
+		return 12
+	} 
+	# remove the tar file
+	/bin/rm -f "$G_LOCAL_TEST_HARNESS_RESULTS_DIR/$G_TEST_HARNESS_RESULTS_TARBALL" || {
+		echo "${G_SCRIPTNAME} ${LINENO}: warning - unable to delete local results tarball $G_LOCAL_TEST_HARNESS_RESULTS_DIR/$G_TEST_HARNESS_RESULTS_TARBALL"
+	}
+	if [ -d $G_LOCAL_TEST_HARNESS_RESULTS_DIR/$G_BUILD_NUMBER ]; then
+		echo "${G_SCRIPTNAME} ${LINENO}: renaming directory $G_LOCAL_TEST_HARNESS_RESULTS_DIR/$G_BUILD_NUMBER $G_LOCAL_TEST_HARNESS_RESULTS_DIR/$BUILD_ID"
+		mv $G_LOCAL_TEST_HARNESS_RESULTS_DIR/$G_BUILD_NUMBER $G_LOCAL_TEST_HARNESS_RESULTS_DIR/$BUILD_ID
+	fi		
+	return 0
+
+}
+
+# get OM Server Primary details
+ci_env_get_om_server_param() {
+	local l_param_name=$1
+	local l_param_value_varname=$2
+
+	eval unset \$l_param_value_varname
+
+	if [[ -z "$l_param_name" || -z "$l_param_value_varname" ]]; then
+		echo "${G_SCRIPTNAME}: Error - required parameter missing"
+		return 1
+	fi
+	local l_count=0
+	while [ $l_count -lt ${#CI_SERVER_IP[@]} ]; do
+		if [[ ${CI_SERVER_INST_TYPE[$l_count]} = cominf &&\
+			${CI_SERVER_CONFIG[$l_count]} = om_serv_master ]]; then
+			case $l_param_name in
+				ip)
+					eval $l_param_value_varname=${CI_SERVER_IP[$l_count]}
+					;;
+				hostname)
+					eval $l_param_value_varname=${CI_SERVER_HOSTNAME[$l_count]}
+					;;
+				rootpw)
+					eval $l_param_value_varname=${CI_SERVER_ROOTPW[$l_count]}
+					;;
+				*)
+					echo "${G_SCRIPTNAME}: unrecognised param $l_param_name !"
+					return 1
+					;;
+			esac
+				
+			return 0
+		fi
+		let l_count+=1
+			
+	done
+	echo "${G_SCRIPTNAME}: OM Services primary details not found"
+	return 1
+}
+
+########################################################
+### Function: valid_ip ##########################
+# Purpose : Check that the given IP is valid IP or not.#
+# Arguments :                                          #
+# $1 - IP address, mandatory                           #
+########################################################
+valid_ip()
+{
+        local L_IP=$1
+        local L_STAT=1
+        echo $L_IP | grep "^[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}$" > /dev/null && {
+                OIFS=$IFS
+                IFS='.'
+                set -f
+                set -- $L_IP
+                [[ $1 -le 255 && $2 -le 255 && $3 -le 255 && $4 -le 254 ]]
+                L_STAT=$?
+                IFS=$OIFS
+                set +f
+        }
+
+        return $L_STAT
+}
+
+
+
+
+
+#MAIN
+
+# if we cant get Jenkins build number then
+# flag an error
+if [ -z "$BUILD_NUMBER" ]; then
+	echo "${G_SCRIPTNAME}: Warning - unable to determine CI build job number"
+	BUILD_NUMBER=$$
+fi
+#$BUILD_ID will be blank when ran via command line
+if [ -z "$BUILD_ID" ]; then
+	echo "${G_SCRIPTNAME}: Warning - unable to determine CI build ID - using ${G_BUILD_NUMBER}-1350487300 as CI build ID"
+	G_BUILD_NUMBER=`date +%s`
+	let G_BUILD_NUMBER=${G_BUILD_NUMBER}-1350487300  
+else
+	G_BUILD_NUMBER=`date --utc --date "$(echo ${BUILD_ID}  |sed 's/\(.*\)_\(.*\)/\1 \2/' | sed 's/-/:/3'| sed 's/-/:/3')" "+%s"`
+fi
+
+echo "${G_SCRIPTNAME} ${LINENO} G_BUILD_NUMBER=${G_BUILD_NUMBER} BUILD_ID=${BUILD_ID}"
+#GI_BUILD_NUMBER DEFINED IN INJECTED file. /var/lib/jenkins/cominf_build/build_scripts/nfd/etc/.properties
+G_SCRIPTDIR=$(cd $(/usr/bin/dirname $0); pwd)
+G_SCRIPTNAME=$(/bin/basename $0)
+G_BUILD_ROOTDIR=$( /usr/bin/dirname $G_SCRIPTDIR )
+#G_BUILD_ROOTDIR=$( /usr/bin/dirname $( /usr/bin/dirname $G_SCRIPTDIR ))
+G_WORKSPACEDIR=$G_BUILD_ROOTDIR/nfd_workspace
+G_INST_TYPE=nfd_stageing
+G_STAGINGDIR=$G_WORKSPACEDIR/$G_INST_TYPE
+G_PACKAGE_TGZFILENAME=cominf_software.tar.gz
+G_PACKAGE_TGZFILE=$G_WORKSPACEDIR/$G_PACKAGE_TGZFILENAME
+G_PACKAGEBUILDSCRIPT=$G_SCRIPTDIR/nfd_build_packages.bsh
+G_TEST_HARNESS_RESULTS_TARBALL=${G_BUILD_NUMBER}_report.tar.gz
+G_REMOTE_TEST_HARNESS_DIR="/var/tmp/cominf_test"
+G_REMOTE_TEST_RESULTS_DIR="/var/tmp/reports/ci"
+G_REMOTE_TEST_HARNESS_RESULTS_TGZ="$G_REMOTE_TEST_RESULTS_DIR/$G_TEST_HARNESS_RESULTS_TARBALL"
+G_LOCAL_TEST_HARNESS_RESULTS_DIR=$G_WORKSPACEDIR/results
+#G_LOCAL_TEST_HARNESS_RESULTS_DIR=/var/lib/jenkins/cominf_build/nfd_results/$BUILD_ID/results
+G_REMOTEINSTALLSCRIPTNAME=nfd_ci_job_remote_install.bsh
+G_REMOTEINSTALLSCRIPT=$G_SCRIPTDIR/$G_REMOTEINSTALLSCRIPTNAME
+G_SSH_SETUPSCRIPT=$G_SCRIPTDIR/ssh_setup.sh
+G_TEST_HARNESS_SCRIPT="atcominf.bsh"
+G_TEST_HARNESS_SELECTED_FAS="LDAP DNS DHCP NTP"
+G_TMP_DIR=/var/tmp
+G_HARNESS_HOST=""
+G_HARNESS_HOST_ROOTPW=""
+G_HARNESS_RETCODE=0
+G_MWS_IP=10.45.201.54
+
+
+echo -e "\n\n** Job started **\n\n"
+
+while getopts "b:hf:" opt; do
+
+	case $opt in
+		b)
+			G_BUILD_NUMBER=$OPTARG
+		;;
+		f)
+			G_CIBUILDENVFILE=$OPTARG
+		;;
+		h)
+			usage
+			exit 0
+		;;
+		?)      # Print usage and exit error
+			printf "${SCRIPTNAME}: ERROR: Invalid option: '${OPTARG}'.\n"
+			usage
+			exit 1
+		;;
+
+	esac
+done
+echo "G_CIBUILDENVFILE=$G_CIBUILDENVFILE"
+cd $G_SCRIPTDIR
+if ! git pull; then
+	echo "${G_SCRIPTNAME}: Error - failed to update git pull cominf_build repo"
+	exit 1
+fi
+
+if [ ! -s "$G_CIBUILDENVFILE" ]; then
+	echo "${G_SCRIPTNAME}: Error - unable to find env file or file empty"
+	usage
+	exit 1
+fi
+
+
+# empty jenkins known_hosts
+> $HOME/.ssh/known_hosts
+
+# add Gerrit SSH host key
+echo "[eselivm2v238l.lmera.ericsson.se]:29418,[150.132.181.143]:29418 ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEA37bYdj0bLVyuOL36TyeA0OqzWOE5gpFcKikb5RqtpHFqRo6175yfz6LZv83XSzq2dckS4Ja7wFjoXDu35LdwnCUsWCQU4vRLgLaMDoO6TxpIndi3K9yifcVODlbj66PmXBm0QhxqzzQIU0joJeG6JrqIsXJHXO9jcIZslyY9bnpk1L8toOKtW+N2fkgxDUBIr2cdFZ/UpvH00SmtvMJv1uAxvsDP+IzvqarLxt4quhRIB3y6ejUmbWXB+4ACxjkptUEaDA/2dwriBdWFpFuNCZmBLVVPZG/UU5aPRZ24eiiGKL0mN8hIwRlagCki5nBxkOe7yTo03vGmzqKUp3mAVw==" >> $HOME/.ssh/known_hosts
+
+# add MWS SSH host key
+echo "$G_MWS_IP ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAIEA82p4kUftWChjjGNAewP/zOJnYgIc9rHFI+tjK1gg7BJETC1oM34bUpJeVaQ5+uHPWVZaLOagEmrBzRuj+KRzR3ECzNduLVB1XbC4jZgeCLdJBBIaE74FqEJsIkyChW8n2M/l2EvE0Ia07va6gqziw7zReNxju9ryxtWxEaBm5Sc="  >> $HOME/.ssh/known_hosts
+
+
+
+
+# empty roots known_hosts file
+$G_SSH_SETUPSCRIPT ssh "root@localhost > /root/.ssh/known_hosts" shroot || {
+	echo "${G_SCRIPTNAME}: Error Failed to clear file  /root/.ssh/known_hosts"
+	exit 1
+}
+
+
+read_envfile || exit 1
+
+#build_software || exit 1
+build_test_harness || exit 1
+
+
+install_software || exit 1
+
+start_test_harness || exit 1
+
+copy_test_results || exit 1
+
+if [ $G_HARNESS_RETCODE -ne 0 ]; then
+	echo "${G_SCRIPTNAME}: ** Test harness returned non-zero error code $G_HARNESS_RETCODE **"
+	echo "${G_SCRIPTNAME}: ** Job failed **"
+	exit 1
+else
+	echo -e "\n\n** Job completed successfully **\n\n"
+fi
+
+exit 0
+
+
+
+
+
+

@@ -1,0 +1,20 @@
+#!/bin/bash
+if grep 'CLIENT_DISP_TYPE=VGA' /ericsson/config/build/kick_params.cfg > /dev/null 2>&1; then
+        exec < /dev/tty6 > /dev/tty6 2> /dev/tty6
+        chvt 6
+else
+	exec < /dev/console > /dev/console 2> /dev/console
+	/bin/plymouth hide-splash
+fi
+echo "** calling wifi installer **"
+mkdir -p /home/wifi_admin/wm6_loads &&
+chmod 777 /home/wifi_admin/wm6_loads &&
+cp /tmp/APP/linux/software/WiFiManager.bin /home/wifi_admin/wm6_loads || {
+	echo "** Failed to copy wifi software from install media"
+	exit 1
+}
+/home/wifi_admin/wm6_loads/WiFiManager.bin || {
+	echo "Error occured running wifi installer on $( hostname )"
+	exit 1
+}
+

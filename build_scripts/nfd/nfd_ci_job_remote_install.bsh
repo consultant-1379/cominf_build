@@ -1,0 +1,187 @@
+#!/bin/bash
+
+#!/bin/bash
+#------------------------------------------------------------------------
+#
+#       COPYRIGHT (C) ERICSSON RADIO SYSTEMS AB, Sweden
+#
+#       The copyright to the document(s) herein is the property of
+#       Ericsson Radio Systems AB, Sweden.
+#
+#       The document(s) may be used and/or copied only with the written
+#       permission from Ericsson Radio Systems AB or in accordance with
+#       the terms and conditions stipulated in the agreement/contract
+#       under which the document(s) have been supplied.
+#
+#------------------------------------------------------------------------
+
+# History
+# 02/04/2012    edavmax         First version
+
+usage() {
+cat << EOF
+
+Usage:  ${SCRIPTNAME} -f <Test env file> [-h]
+
+This script is called by the script ci_build.bsh script. It performs the following actions:
+
+-Installs cominf software on specified server 
+
+
+EOF
+
+return 0
+
+}
+G_SCRIPTNAME=$(/bin/basename $0)
+G_SCRIPTDIR=$(cd $(/usr/bin/dirname $0); pwd)
+G_TMP_DIR=/var/tmp
+G_PACKAGE_TGZFILENAME=cominf_software.tar.gz
+G_PACKAGE_TGZFILE=$G_TMP_DIR/$G_PACKAGE_TGZFILENAME
+G_INST_TYPE=cominf
+G_COMINF_SOFTWARE_LOCATION=$G_TMP_DIR/$G_INST_TYPE/packages
+G_JENKINS_REPOFILE=$G_COMINF_SOFTWARE_LOCATION/cominf_apps_ci.repo
+G_YUM_REPODIR=/etc/yum.repos.d
+G_YUM_COMINF_APPGROUP="COMInf Applications"
+G_COMINF_TEST_HARNESS_PREFIX=COMInf_TEST_HARNESS-R1A01-0.noarch
+G_COMINF_TEST_HARNESS_RPM=${G_COMINF_TEST_HARNESS_PREFIX}.rpm
+G_COMINF_CORE_PACKAGE_RPM=COMInf_CORE-R1A01-0.noarch.rpm
+G_COMINF_LDAP_PACKAGE_RPM=COMInf_LDAP-R1A01-0.noarch.rpm
+G_COMINF_OPENDJ_PACKAGE_RPM=OpenDJ-2.5.0_Xpress1-0.noarch.rpm
+G_COMINF_JRE_PACKAGE_RPM=jre-6u32-linux-amd64.rpm
+G_COMINF_TEST_HARNESS_TGZ=${G_COMINF_TEST_HARNESS_PREFIX}.tar.gz
+G_PLATFORM=$( uname -a ) 
+SMRS_PKGNAME=ERICbismrsmc_R1A01_PA01.pkg
+IST_RUN=/opt/ericsson/sck/bin/ist_run
+
+
+while getopts "h:c:i:" opt; do
+
+	case $opt in
+		h)
+			usage
+			exit 0
+		;;
+		c)
+			G_CONFIGTYPE="$OPTARG"
+		;;
+		i)
+			G_INST_TYPE="$OPTARG"
+		;;
+		?)      # Print usage and exit error
+			printf "${SCRIPTNAME}: ERROR: Invalid option: '${OPTARG}'.\n"
+			usage
+			exit 1
+		;;
+
+	esac
+done
+
+if [ ! -s $G_PACKAGE_TGZFILE ]; then
+	echo "${G_SCRIPTNAME}: ${LINENO}:Error - failed to find file $G_PACKAGE_TGZFILE or file empty"
+	exit 1
+fi
+
+if [ -z "$G_CONFIGTYPE" ]; then
+	echo "${G_SCRIPTNAME}: ${LINENO}:Error config type of server not specified"
+	exit 1
+fi
+
+if [ -z "$G_INST_TYPE" ]; then
+	echo "${G_SCRIPTNAME}: ${LINENO}:Error inst type of server not specified"
+	exit 1
+fi
+
+cd $G_TMP_DIR
+echo "${G_SCRIPTNAME}: ${LINENO}:gzip -cd $G_PACKAGE_TGZFILE | tar xvf -"
+gzip -cd $G_PACKAGE_TGZFILE | tar xvf - > /dev/null || {
+	echo "${G_SCRIPTNAME}: ${LINENO}:Error - failed to unpack $G_PACKAGE_TGZFILE"
+	exit 1
+}
+
+if [ "$G_CONFIGTYPE" = system ]; then
+	# install new smrs package
+#eeidle	if [ -f $G_TMP_DIR/$SMRS_PKGNAME ]; then
+#eeidle		echo "** installing package $SMRS_PKGNAME **"
+#eeidle		$IST_RUN -d $G_TMP_DIR/$SMRS_PKGNAME -auto -pa -force || {
+#eeidle		echo "Error installation of $SMRS_PKGNAME on $( hostname ) failed"
+#eeidle
+#eeidle			exit 1
+#eeidle		}
+#eeidle	else
+#eeidle		echo "Unable to find smrs package $SMRS_PKGNAME on $( hostname )"
+#eeidle	fi
+	if [ ! -d ${G_COMINF_SOFTWARE_LOCATION} ]; then 
+		mkdir ${G_COMINF_SOFTWARE_LOCATION}
+	fi
+	if [ -f $G_TMP_DIR/$G_COMINF_TEST_HARNESS_TGZ ]; then
+            echo "${G_SCRIPTNAME}: ${LINENO}:$G_TMP_DIR/$G_COMINF_TEST_HARNESS_TGZ exists, moving to ${G_COMINF_SOFTWARE_LOCATION}/${G_COMINF_TEST_HARNESS_TGZ}"
+            mv $G_TMP_DIR/$G_COMINF_TEST_HARNESS_TGZ ${G_COMINF_SOFTWARE_LOCATION}/${G_COMINF_TEST_HARNESS_TGZ}
+	    if [ $? -ne 0 ]; then
+		echo "${G_SCRIPTNAME}: ${LINENO}:Error - mv failed"
+		exit 1
+	    fi
+        else
+		exit 1
+	fi
+	if [ -f $G_COMINF_SOFTWARE_LOCATION/$G_COMINF_TEST_HARNESS_TGZ ]; then
+		echo "${G_SCRIPTNAME}: ${LINENO}:Unpacking cominf test harness tarball on $( hostname )"
+		cd /
+		gzip -cd $G_COMINF_SOFTWARE_LOCATION/$G_COMINF_TEST_HARNESS_TGZ | /usr/sfw/bin/gtar xvf - > /dev/null  
+		if [ $? -eq 1 ]; then
+			echo "${G_SCRIPTNAME}: ${LINENO}:Error - failed to unpack cominf test harness tarball on $( hostname )"
+			exit 1
+		fi
+			
+	else
+		echo "${G_SCRIPTNAME}: ${LINENO}:Unable to find cominf test harness tarball on $( hostname ) at $G_COMINF_SOFTWARE_LOCATION/$G_COMINF_TEST_HARNESS_TGZ"
+	fi
+fi
+if [[  "$G_CONFIGTYPE" = om_serv_master ||  "$G_CONFIGTYPE" = om_serv_slave ]]; then
+	if [ ! -s $G_JENKINS_REPOFILE ]; then
+		echo "${G_SCRIPTNAME}: ${LINENO}:Error - failed to find file $G_JENKINS_REPOFILE or file empty"
+		exit 1
+	fi
+	cp $G_JENKINS_REPOFILE $G_YUM_REPODIR || {
+		echo "${G_SCRIPTNAME}: ${LINENO}:Error - failed to copy file $G_JENKINS_REPOFILE to $G_YUM_REPODIR"
+		exit 1
+	}
+	
+	# clean yum cache data
+	yum clean all && yum clean metadata && yum clean dbcache && yum makecache
+
+	# remove cominf package group if already installed
+	#yum groupremove -y "$G_YUM_COMINF_APPGROUP" || {
+	#	echo "Error occured removing yum group $G_YUM_COMINF_APPGROUP"
+	#	exit 1
+	#}
+	for package in $G_COMINF_SOFTWARE_LOCATION/$G_COMINF_CORE_PACKAGE_RPM $G_COMINF_SOFTWARE_LOCATION/$G_COMINF_LDAP_PACKAGE_RPM $G_COMINF_SOFTWARE_LOCATION/$G_COMINF_JRE_PACKAGE_RPM $G_COMINF_SOFTWARE_LOCATION/$G_COMINF_OPENDJ_PACKAGE_RPM $G_COMINF_SOFTWARE_LOCATION/$G_COMINF_TEST_HARNESS_RPM ; do
+		echo "${G_SCRIPTNAME}: ${LINENO}:Upgrading package $package"
+		rpm -Uvh --force $package || {
+			echo "${G_SCRIPTNAME}: ${LINENO}:Error - Failed to upgrade package $package"
+			exit 1
+		}
+	done
+	
+	
+	# install cominf package group 
+	#yum groupinstall -y "$G_YUM_COMINF_APPGROUP" || {
+	#	echo "Error occured installing yum group $G_YUM_COMINF_APPGROUP"
+	#		exit 1
+	#	}
+	
+	# restart opendj
+	if [[ "$G_CONFIGTYPE" = om_serv_master || "$G_CONFIGTYPE" = om_serv_slave ]]; then
+		echo "Restarting OpenDJ on $( hostname )"
+		service opendj restart || {
+			echo "${G_SCRIPTNAME}: ${LINENO}:Error - failed to restart opendj service"
+			exit 1
+		}
+	fi
+fi
+
+exit 0
+
+
+
+

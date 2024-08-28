@@ -1,0 +1,4 @@
+[cominf_apps_jenkins]
+name="Cominf Applications Jenkins"
+baseurl="file:///var/tmp/cominf/packages"
+gpgcheck=0

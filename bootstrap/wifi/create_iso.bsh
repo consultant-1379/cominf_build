@@ -1,0 +1,163 @@
+#!/bin/bash
+#------------------------------------------------------------------------
+#
+#       COPYRIGHT (C) ERICSSON RADIO SYSTEMS AB, Sweden
+#
+#       The copyright to the document(s) herein is the property of
+#       Ericsson Radio Systems AB, Sweden.
+#
+#       The document(s) may be used and/or copied only with the written
+#       permission from Ericsson Radio Systems AB or in accordance with
+#       the terms and conditions stipulated in the agreement/contract
+#       under which the document(s) have been supplied.
+#
+#------------------------------------------------------------------------
+
+# This script creates iso image of wifi installation software
+#
+
+usage() {
+cat << EOF
+
+Usage: ${G_SCRIPTNAME} [-h] -p <path to Wifi software> -s <shipment> -r <media rev>
+
+Example:
+
+${G_SCRIPTNAME} -s 013_2/13.2.8 -r A
+
+EOF
+
+return 0
+
+}
+
+#
+# function to configure wifi software
+#
+configure_wifi_software() {
+	local finish=0
+	local newsoft
+	newsoft=$( basename $G_WIFI_SOFTWARE )
+
+	/bin/rm -f $G_MEDIA_SOFTDIR/WiFi* || {
+		echo "Failed to remove old Wifi software" 
+		return 1
+	}
+	echo "Copying new Wifi software to staging area"
+	cp $G_WIFI_SOFTWARE $G_MEDIA_SOFTDIR/WiFiManager.bin || {
+		echo "** Error - failed to copy new Wifi software to staging area **"
+		return 1
+	}
+	chmod +x $G_MEDIA_SOFTDIR/WiFi* || {
+		echo "Error - failed to set exe permissions on Wifi exe"
+		return 1
+	}
+	
+	return 0
+	
+
+}
+
+create_media_ident_file() {
+
+echo "creating media identity file"
+
+cat > $G_MEDIA_IDENTITY_FILE <<ENDOFINPUT
+media_label=EWM
+media_desc=EWM BASE SW
+media_prefix=$G_MEDIA_CXP_PREFIX
+media_number=$G_MEDIA_CXP_NUMBER
+media_rev=$G_MEDIA_REV
+media_dir=$G_MEDIA_SHIPMENT
+media_arch=common
+ENDOFINPUT
+}
+
+
+
+#
+# function to build media
+#
+build_media() {
+	local l_iso_file=$G_MEDIA_ISODIR/${G_MEDIA_CXP_PREFIX}-${G_MEDIA_CXP_NUMBER}_${G_MEDIA_REV}.iso
+	local l_md5_file=$G_MEDIA_ISODIR/${G_MEDIA_CXP_PREFIX}-${G_MEDIA_CXP_NUMBER}_${G_MEDIA_REV}.md5
+	create_media_ident_file || return 1
+	echo "Creating iso file $l_iso_file"
+	mkisofs -f -V "wifi_install" -r $G_MEDIA_STAGINGDIR > $l_iso_file 2>/dev/null || {
+        	echo "Error failed to create $l_iso_file"
+        	return 1
+	}
+	echo "Creating md5 file $l_md5_file"
+	md5sum $l_iso_file | awk '{print $1}'  > $l_md5_file || {
+        	echo "Error failed to create $l_md5_file"
+        	return 1
+	}
+	return 0
+
+}
+
+
+
+
+#MAIN
+
+G_INST_TYPE=cominf
+G_SCRIPTNAME=$(/bin/basename $0)
+G_SCRIPTDIR=$(cd $(/usr/bin/dirname $0); pwd)
+G_MEDIA_ISODIR=$G_SCRIPTDIR/iso
+G_MEDIA_STAGINGDIR=$G_SCRIPTDIR/staging
+G_MEDIA_SOFTDIR=$G_MEDIA_STAGINGDIR/linux/software
+G_MEDIA_CXP_PREFIX=19089
+G_MEDIA_CXP_NUMBER=CXP1234567
+G_MEDIA_IDENTITY_FILE=$G_MEDIA_STAGINGDIR/.ewm_linux
+
+while getopts ":p:s:r:" opt
+	do
+	case ${opt} in
+		h)      # Print help and exit OK
+			usage
+			exit 0
+		;;
+		p)
+			G_WIFI_SOFTWARE=$OPTARG
+		;;
+		s)
+			G_MEDIA_SHIPMENT=$OPTARG
+		;;
+		r)
+			G_MEDIA_REV=$OPTARG
+		;;
+		*)      # Print usage and exit error
+			usage
+			exit 1
+		;;
+	esac
+done
+
+if [ ! -f "$G_WIFI_SOFTWARE" ]; then
+	echo "** Error - Unable to find WiFi software image in path \"$G_WIFI_SOFTWARE\"  **"
+	usage
+	exit 1
+fi
+
+if [ -z "$G_MEDIA_SHIPMENT" ]; then
+	echo "** Error - media shipment must be specified **"
+	usage
+	exit 1
+fi
+
+if [ -z "$G_MEDIA_REV" ]; then
+	echo "** Error - media revision must be specified **"
+	usage
+	exit 1
+fi
+
+
+configure_wifi_software || exit 1
+
+build_media || {
+	echo "Error - failed to create iso file"
+	exit 1
+}
+
+exit 0

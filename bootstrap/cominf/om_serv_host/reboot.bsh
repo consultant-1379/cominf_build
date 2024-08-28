@@ -1,0 +1,11 @@
+#!/bin/bash
+
+exec < /dev/tty6 > /dev/tty6 2> /dev/tty6
+chvt 6
+
+echo "** calling cominf installer **"
+/opt/ericsson/cominf_core/bin/cominf_install.bsh || {
+	echo "Error occured running cominf installer on $( hostname )"
+	exit 1
+}
+

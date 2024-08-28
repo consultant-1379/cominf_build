@@ -1,0 +1,4 @@
+[cominf_apps_dvd]
+name="Cominf Applications DVD"
+baseurl="file:///mnt/cdrom/cominf/packages"
+gpgcheck=0
